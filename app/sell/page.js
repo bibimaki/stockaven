@@ -3,6 +3,32 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
+/* =========================================================
+ * Telegram Notification (เรียกผ่าน API Route ฝั่ง Server)
+ * ========================================================= */
+
+// ส่งข้อมูลการขายไปที่ /api/telegram — Bot Token อยู่ฝั่ง Server เท่านั้น
+// ไม่ throw error ออกไปข้างนอก เพื่อไม่ให้กระทบระบบขาย
+async function notifySale({ productName, quantity, totalPrice, stockAfter }) {
+  try {
+    const res = await fetch("/api/telegram", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productName, quantity, totalPrice, stockAfter }),
+    });
+
+    if (!res.ok) {
+      console.error("Telegram notify failed:", res.status, await res.text());
+    }
+  } catch (err) {
+    console.error("Telegram notify error:", err);
+  }
+}
+
+/* =========================================================
+ * หน้าขายสินค้า
+ * ========================================================= */
+
 export default function SellPage() {
   const [products, setProducts] = useState([]);
   const [selectedSku, setSelectedSku] = useState("");
@@ -58,6 +84,9 @@ export default function SellPage() {
 
     const total = Number(selectedProduct.price) * qty;
 
+    // [แก้ไข] คำนวณสต๊อกหลังตัดไว้ก่อน เพื่อใช้ทั้งอัปเดต DB และส่ง Telegram
+    const newStock = selectedProduct.stock - qty;
+
     const { error } = await supabase.from("sales").insert({
       product_name: selectedProduct.name,
       quantity: qty,
@@ -73,7 +102,7 @@ export default function SellPage() {
     const { error: stockError } = await supabase
       .from("products")
       .update({
-        stock: selectedProduct.stock - qty,
+        stock: newStock,
       })
       .eq("sku", selectedProduct.sku);
 
@@ -83,6 +112,16 @@ export default function SellPage() {
       await loadProducts();
       return;
     }
+
+    // [เพิ่ม] ตัดสต๊อกสำเร็จแล้ว -> ส่งแจ้งเตือน Telegram
+    // ไม่ใช้ await เพื่อไม่ให้หน้าเว็บรอ Telegram
+    // และ notifySale มี try/catch ภายในอยู่แล้ว จึงไม่กระทบระบบขายแน่นอน
+    notifySale({
+      productName: selectedProduct.name,
+      quantity: qty,
+      totalPrice: total,
+      stockAfter: newStock,
+    });
 
     setMessage(
       `ขายสำเร็จ! ${selectedProduct.name} × ${qty} = ฿${total.toLocaleString()}`
